@@ -1,0 +1,17 @@
+{
+  "name": "aura-oracle-bot",
+  "version": "1.0.0",
+  "description": "Bot AI automatico per il feed social di Aura Music",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@google/generative-ai": "^0.2.0",
+    "dotenv": "^16.4.5",
+    "firebase-admin": "^12.0.0",
+    "rss-parser": "^3.13.0"
+  },
+  "author": "Horizon Global",
+  "license": "ISC"
+}
