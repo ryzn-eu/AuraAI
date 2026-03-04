@@ -1,10 +1,10 @@
-name: Aura Ai Bot
+name: Aura Oracle Bot
 
 on:
   schedule:
-    # Esegue il bot ogni ora al minuto 0 (es. 10:00, 11:00...)
-    - cron: '0 * * * *'
-  workflow_dispatch: # Questo pulsante ci permetterà di avviarlo a comando!
+   
+    - cron: '*/40 * * * *'
+  workflow_dispatch:
 
 jobs:
   post-news:
@@ -12,16 +12,13 @@ jobs:
     steps:
       - name: Checkout del codice
         uses: actions/checkout@v3
-
       - name: Setup Node.js
         uses: actions/setup-node@v3
         with:
           node-version: '18'
-
       - name: Installa pacchetti
         run: npm install
-
-      - name: Avvia Aura Oracle
+      - name: Avvia Aura AI
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
