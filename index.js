@@ -3,12 +3,10 @@ const admin = require('firebase-admin');
 const Parser = require('rss-parser');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 
-// 1. Inizializzazione sicura tramite Variabili d'Ambiente (GitHub Secrets)
 const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
-  // L'URL del tuo database letto dal tuo progetto Aura
   databaseURL: "https://auramusic-hrz-default-rtdb.europe-west1.firebasedatabase.app"
 });
 
@@ -16,115 +14,96 @@ const db = admin.database();
 const parser = new Parser();
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
-// 2. Funzione per leggere la "memoria" da Firebase
 async function getAlreadyPostedLinks() {
     const postedLinks = new Set();
     try {
-        console.log("Controllo i post precedenti su Firebase...");
-        // Peschiamo gli ultimi 50 post del bot per vedere cosa ha già pubblicato
-        const snapshot = await db.ref('posts')
-            .orderByChild('authorId')
-            .equalTo('aura-ai-bot')
-            .limitToLast(50)
-            .once('value');
-
+        const snapshot = await db.ref('posts').orderByChild('authorId').equalTo('aura-ai-bot').limitToLast(50).once('value');
         if (snapshot.exists()) {
             snapshot.forEach(child => {
-                const post = child.val();
-                if (post.sourceLink) {
-                    postedLinks.add(post.sourceLink);
-                }
+                if (child.val().sourceLink) postedLinks.add(child.val().sourceLink);
             });
         }
-    } catch (error) {
-        console.error("Errore nel recupero dei post precedenti:", error);
-    }
+    } catch (error) { console.error("Errore recupero post:", error); }
     return postedLinks;
 }
 
-// 3. Generazione testo con Google Gemini
-async function generatePostText(title, snippet, link) {
+async function generatePostText(title, snippet) {
     try {
         const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
         const prompt = `
-            Sei 'Aura Oracle', l'intelligenza artificiale ufficiale dell'app musicale Aura.
-            Devi creare un breve post social (massimo 2-3 frasi) in italiano partendo da questa notizia musicale.
-            Usa un tono informale, accattivante e fai una domanda alla community alla fine per stimolare i commenti.
-            Aggiungi emoji pertinenti. Alla fine del testo, vai a capo e scrivi "Fonte: " seguito dal link.
+            Sei 'Aura Oracle', un giornalista musicale esperto e l'intelligenza artificiale dell'app Aura.
+            Hai questa notizia: "${title}". I dettagli aggiuntivi sono: "${snippet}".
             
-            Notizia: ${title}
-            Dettagli: ${snippet}
-            Link: ${link}
+            Se i dettagli sono vuoti o brevi, usa la tua conoscenza per scrivere un breve post (max 3 frasi) spiegando il contesto della notizia in modo accattivante.
+            Chiudi sempre il post con una domanda rivolta alla community per farli commentare. Usa 2 o 3 emoji.
+            
+            DEVI TRADURRE IL POST e restituirmi ESATTAMENTE un oggetto JSON valido con queste chiavi: "en", "it", "es", "de", "ro", "ar".
+            NON aggiungere markdown, NON aggiungere la scritta \`\`\`json. Solo le parentesi graffe e il contenuto.
         `;
 
         const result = await model.generateContent(prompt);
-        return result.response.text();
+        let rawText = result.response.text();
+        
+        // Pulisce eventuali markdown inseriti per sbaglio da Gemini
+        rawText = rawText.replace(/```json/g, '').replace(/```/g, '').trim();
+        return rawText; // Questo ora è un JSON in formato stringa!
+        
     } catch (error) {
-        console.error("Errore durante la generazione AI:", error);
-        return `🔥 Ultime news: ${title}\nCosa ne pensate?\nFonte: ${link}`;
+        console.error("Errore generazione AI:", error);
+        // Fallback JSON in caso di errore
+        return JSON.stringify({
+            "en": `🔥 Breaking: ${title}\nWhat do you think?`,
+            "it": `🔥 Ultime news: ${title}\nCosa ne pensate?`,
+            "es": `🔥 Últimas noticias: ${title}\n¿Qué opinan?`,
+            "de": `🔥 Aktuelle News: ${title}\nWas denkt ihr?`,
+            "ro": `🔥 Știri de ultimă oră: ${title}\nCe părere aveți?`,
+            "ar": `🔥 أخبار عاجلة: ${title}\nما رأيكم؟`
+        });
     }
 }
 
-// 4. Logica principale
 async function fetchAndPostNews() {
-    console.log(`[${new Date().toLocaleTimeString()}] Avvio Aura Oracle Bot...`);
-    
+    console.log("Avvio Aura Oracle Bot...");
     try {
-        // Recuperiamo i link già postati
         const postedLinks = await getAlreadyPostedLinks();
+        // NME è un feed eccellente e ricco di contenuti per la musica
+        const feed = await parser.parseURL('https://www.nme.com/news/music/feed');
         
-        // Leggiamo un feed RSS musicale (Es: Consequence of Sound)
-        const feed = await parser.parseURL('https://consequence.net/category/music/feed/');
-        
-        if (feed.items.length === 0) {
-            console.log("Nessuna notizia trovata nel feed.");
-            process.exit(0);
-        }
-
-        // Cerchiamo la prima notizia che NON è presente in Firebase
         let articleToPost = null;
         for (const item of feed.items) {
             if (!postedLinks.has(item.link)) {
                 articleToPost = item;
-                break; // Trovata la prima novità, fermiamo il ciclo
+                break;
             }
         }
 
         if (!articleToPost) {
-            console.log("Tutte le notizie recenti sono già state pubblicate. Nessuna azione necessaria.");
-            process.exit(0); // Chiude lo script correttamente per GitHub Actions
+            console.log("Nessuna nuova notizia. Termino.");
+            process.exit(0);
         }
 
-        console.log(`Novità trovata: ${articleToPost.title}`);
-        
-        // Chiediamo all'AI di formulare il post
-        const postContent = await generatePostText(
-            articleToPost.title, 
-            articleToPost.contentSnippet || "", 
-            articleToPost.link
-        );
+        console.log(`Generazione post per: ${articleToPost.title}`);
+        const postContentJSON = await generatePostText(articleToPost.title, articleToPost.contentSnippet || "");
 
-        // Prepariamo i dati per Firebase, aggiungendo "sourceLink" come memoria per il futuro
         const postData = {
             authorId: "aura-ai-bot",
             authorName: "Aura Oracle",
-            authorPic: "https://i.imgur.com/8q3k3Hk.png", // Inserisci qui il logo della tua AI
-            text: postContent,
+            // Logo generativo ad alta risoluzione in stile "Bot Sci-Fi"
+            authorPic: "https://api.dicebear.com/7.x/bottts/svg?seed=Aura&backgroundColor=050505,06b6d4&colors=cyan",
+            text: postContentJSON, // Salviamo la stringa JSON con tutte le lingue
             timestamp: Date.now(),
             type: "text",
-            sourceLink: articleToPost.link // <--- Fondamentale per la memoria!
+            sourceLink: articleToPost.link
         };
 
-        // Scriviamo nel nodo 'posts' del tuo Realtime Database
         const newPostRef = db.ref('posts').push();
         await newPostRef.set({ id: newPostRef.key, ...postData });
-        
-        console.log("✅ Nuovo post pubblicato con successo dall'AI nel feed di Aura!");
-        process.exit(0); // Chiude l'istanza con successo
+        console.log("✅ Post pubblicato con successo!");
+        process.exit(0);
 
     } catch (error) {
-        console.error("❌ Errore critico durante il processo:", error);
-        process.exit(1); // Segnala a GitHub che c'è stato un errore
+        console.error("❌ Errore critico:", error);
+        process.exit(1);
     }
 }
 
